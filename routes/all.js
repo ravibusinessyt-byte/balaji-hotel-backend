@@ -176,13 +176,50 @@ orderRouter.get('/:id', protectAdmin, async (req, res) => {
 orderRouter.post('/', async (req, res) => {
   try {
     const order = await Order.create(req.body);
-    // Update customer stats
-    if (req.body.customer?.userId) {
-      await Customer.findByIdAndUpdate(req.body.customer.userId, {
-        $inc: { totalOrders: 1, totalSpent: req.body.total },
-        lastOrderAt: new Date()
-      });
+
+    // ── AUTO SAVE CUSTOMER (Guest + Registered) ──
+    const phone = req.body.customer?.phone;
+    const name  = req.body.customer?.name;
+    const email = req.body.customer?.email || '';
+    const total = Number(req.body.total) || 0;
+
+    if (phone) {
+      try {
+        // Find existing customer by phone
+        let customer = await Customer.findOne({ phone });
+        if (customer) {
+          // Update existing customer stats
+          customer.totalOrders = (customer.totalOrders || 0) + 1;
+          customer.totalSpent  = (customer.totalSpent  || 0) + total;
+          customer.lastOrderAt = new Date();
+          if (name && name !== '—') customer.name = name;
+          await customer.save();
+        } else {
+          // Create new customer automatically
+          customer = await Customer.create({
+            name:        name || 'Guest Customer',
+            phone:       phone,
+            email:       email,
+            totalOrders: 1,
+            totalSpent:  total,
+            lastOrderAt: new Date(),
+            isActive:    true,
+            addresses:   req.body.address ? [{
+              line1:    req.body.address.line1 || '',
+              line2:    req.body.address.line2 || '',
+              city:     req.body.address.city  || 'Raikot',
+              state:    req.body.address.state || 'Punjab',
+              pincode:  req.body.address.pincode || '',
+              isDefault: true
+            }] : []
+          });
+        }
+      } catch(custErr) {
+        // Don't fail order if customer save fails
+        console.log('Customer save error:', custErr.message);
+      }
     }
+
     res.status(201).json(order);
   } catch (e) { res.status(400).json({ message: e.message }); }
 });

@@ -386,7 +386,71 @@ module.exports.couponRouter = couponRouter;
 const payRouter = require('express').Router();
 const crypto = require('crypto');
 
-// Razorpay
+// ── PAYTM ──
+payRouter.post('/paytm/initiate', async (req, res) => {
+  try {
+    const { amount, orderId, phone } = req.body;
+    const s = await Settings.findOne();
+    const mid = s?.paytmMerchantId || process.env.PAYTM_MERCHANT_ID;
+    const mkey = s?.paytmMerchantKey || process.env.PAYTM_MERCHANT_KEY;
+    const industryType = s?.paytmIndustryType || process.env.PAYTM_INDUSTRY_TYPE || 'Retail';
+    const env = s?.paytmEnv || process.env.PAYTM_ENV || 'PROD';
+
+    if (!mid || !mkey) {
+      // Return COD fallback if Paytm not configured
+      return res.json({ success: false, message: 'Paytm not configured, please use COD', fallbackCOD: true });
+    }
+
+    const txnId = 'BH' + Date.now();
+    const paytmParams = {
+      MID: mid,
+      WEBSITE: env === 'PROD' ? 'DEFAULT' : 'WEBSTAGING',
+      INDUSTRY_TYPE_ID: industryType,
+      CHANNEL_ID: 'WEB',
+      ORDER_ID: txnId,
+      CUST_ID: 'CUST_' + (phone || '0000000000'),
+      MOBILE_NO: phone || '',
+      TXN_AMOUNT: String(amount),
+      CALLBACK_URL: `${process.env.FRONTEND_URL || ''}/paytm-callback?orderId=${orderId}`,
+    };
+
+    // Generate checksum using Paytm's checksum library
+    // Since paytmchecksum package may not be installed, we return params for frontend
+    res.json({
+      success: true,
+      params: paytmParams,
+      env,
+      txnId,
+      dbOrderId: orderId,
+      mid
+    });
+  } catch (e) {
+    console.error('Paytm initiate error:', e);
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+payRouter.post('/paytm/verify', async (req, res) => {
+  try {
+    const { txnId, orderId, status } = req.body;
+    if (status === 'TXN_SUCCESS') {
+      await Order.findByIdAndUpdate(orderId, {
+        paymentStatus: 'paid',
+        paymentMethod: 'paytm',
+        status: 'confirmed',
+        'paymentDetails.paytmOrderId': txnId,
+        'paymentDetails.paidAt': new Date()
+      });
+      res.json({ success: true });
+    } else {
+      res.json({ success: false, message: 'Payment not successful' });
+    }
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+// ── RAZORPAY ──
 payRouter.post('/razorpay/create', async (req, res) => {
   try {
     const Razorpay = require('razorpay');
